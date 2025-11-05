@@ -14,6 +14,11 @@ from transformers import (
     Qwen2ForCausalLM,
     GemmaForCausalLM,
 )
+from models_with_mlp_bias import (
+    register_custom_models,
+    Qwen2MLPWithBiasForCausalLM,
+    LlamaMLPWithBiasForCausalLM,
+)
 
 
 def get_git_hash():
@@ -27,7 +32,7 @@ def get_git_hash():
         return "unknown"
 
 
-def create_readme(pretrained_model, ft_model1, ft_model2, git_hash, args):
+def create_readme(pretrained_model, ft_model1, ft_model2, ft_model3, git_hash, args):
     scale_1 = "" if args.scale_t1 is None else f"{args.scale_t1} * "
     scale_2 = "" if args.scale_t2 is None else f"{args.scale_t2} * "
     scale_3 = "" if args.scale_t3 is None else f"{args.scale_t3} * "
@@ -45,6 +50,7 @@ This model was created by combining task vectors from multiple fine-tuned models
 ```python
 t_1 = TaskVector("{pretrained_model}", "{ft_model1}")
 t_2 = TaskVector("{pretrained_model}", "{ft_model2}")
+t_2 = TaskVector("{pretrained_model}", "{ft_model3}")
 t_combined = {combination}
 new_model = t_combined.apply_to("{pretrained_model}", scaling_coef={args.scaling_coef})
 ```
@@ -54,6 +60,7 @@ Models Used
 - Base Model: https://huggingface.co/{pretrained_model}
 - Fine-tuned Model 1: https://huggingface.co/{ft_model1}
 - Fine-tuned Model 2: https://huggingface.co/{ft_model2}
+- Fine-tuned Model 3: https://huggingface.co/{ft_model3}
 
 Technical Details
 
@@ -65,7 +72,13 @@ Technical Details
 
 
 def get_total_layers(model):
-    if type(model) in {LlamaForCausalLM, Qwen2ForCausalLM, GemmaForCausalLM}:
+    if type(model) in {
+        LlamaForCausalLM,
+        Qwen2ForCausalLM,
+        GemmaForCausalLM,
+        Qwen2MLPWithBiasForCausalLM,
+        LlamaMLPWithBiasForCausalLM,
+    }:
         return len(model.model.layers)
     raise Exception(f"Model {type(model)} not in the current options.")
 
@@ -89,6 +102,8 @@ class TaskVector:
         finetuned_checkpoint=None,
         from_huggingface=True,
         vector=None,
+        total_layers=None,
+        keys_to_add_as_zero=set(),
     ):
         """Initializes the task vector from a pretrained and a finetuned checkpoints.
 
@@ -96,9 +111,10 @@ class TaskVector:
         pretrained model, and another to the finetuned model), or by directly passying in
         the task vector state dict.
         """
+        self.keys_to_add_as_zero = keys_to_add_as_zero
         if vector is not None:
             self.vector = vector
-            self.total_layers = None  # or calculate from vector keys
+            self.total_layers = total_layers  # or calculate from vector keys
         else:
             assert (
                 pretrained_checkpoint is not None and finetuned_checkpoint is not None
@@ -120,6 +136,7 @@ class TaskVector:
                         pretrained_checkpoint
                     ).state_dict()
                     finetuned_state_dict = torch.load(finetuned_checkpoint).state_dict()
+
                 self.vector = {}
                 for key in pretrained_state_dict:
                     if pretrained_state_dict[key].dtype in [torch.int64, torch.uint8]:
@@ -129,18 +146,72 @@ class TaskVector:
                     )
             self.total_layers = get_total_layers(pretrained_checkpoint)
 
+    @classmethod
+    def from_two_finetuned_models(
+        cls,
+        finetuned_checkpoint_1,
+        finetuned_checkpoint_2,
+        scaling_coef_1=1.0,
+        scaling_coef_2=1.0,
+        keys_to_add_as_zero=set(),
+    ):
+        """Create a task vector from the difference between two finetuned models.
+
+        Args:
+            finetuned_checkpoint_1: First finetuned model (path or model)
+            finetuned_checkpoint_2: Second finetuned model (path or model)
+            scaling_coef_1: Scaling factor for first model (default: 1.0)
+            scaling_coef_2: Scaling factor for second model (default: 1.0)
+            from_huggingface: Whether to load from HuggingFace
+
+        Returns:
+            TaskVector: vector = scaling_coef_1 * model_1 - scaling_coef_2 * model_2
+        """
+        with torch.no_grad():
+            finetuned_checkpoint_1 = AutoModelForCausalLM.from_pretrained(
+                finetuned_checkpoint_1
+            )
+            finetuned_state_dict_1 = finetuned_checkpoint_1.state_dict()
+            finetuned_checkpoint_2 = AutoModelForCausalLM.from_pretrained(
+                finetuned_checkpoint_2
+            )
+            finetuned_state_dict_2 = finetuned_checkpoint_2.state_dict()
+
+            vector = {}
+            for key in finetuned_state_dict_1:
+                if finetuned_state_dict_1[key].dtype in [torch.int64, torch.uint8]:
+                    print("Ignoring key:", key)
+                    continue
+                if key not in finetuned_state_dict_2:
+                    raise ValueError(
+                        f"Key {key} is present in first checkpoint but not in second checkpoint"
+                    )
+                vector[key] = (
+                    scaling_coef_1 * finetuned_state_dict_1[key]
+                    - scaling_coef_2 * finetuned_state_dict_2[key]
+                )
+
+        # Create instance with the computed vector
+        instance = cls(vector=vector, keys_to_add_as_zero=keys_to_add_as_zero)
+        instance.total_layers = get_total_layers(finetuned_checkpoint_1)
+        return instance
+
     def __add__(self, other):
         """Add two task vectors together."""
-        # TODO: are we adding the embed / unembed and norm layers? does this make sense?
         with torch.no_grad():
             new_vector = {}
-            for key in self.vector:
-                if key not in other.vector:
+            for key in list(set(self.vector.keys()).union(other.vector.keys())):
+                if key in other.vector and key in self.vector:
+                    new_vector[key] = self.vector[key] + other.vector[key]
+                elif key in self.keys_to_add_as_zero:
+                    new_vector[key] = (
+                        self.vector[key] if key in self.vector else other.vector[key]
+                    )
+                else:
                     raise Exception(
                         f"Warning, key {key} is not present in both task vectors."
                     )
-                new_vector[key] = self.vector[key] + other.vector[key]
-        return TaskVector(vector=new_vector)
+        return TaskVector(vector=new_vector, total_layers=self.total_layers)
 
     def __radd__(self, other):
         if other is None or isinstance(other, int):
@@ -153,7 +224,7 @@ class TaskVector:
             new_vector = {}
             for key in self.vector:
                 new_vector[key] = -self.vector[key]
-        return TaskVector(vector=new_vector)
+        return TaskVector(vector=new_vector, total_layers=self.total_layers)
 
     def __mul__(self, scalar):
         """Multiply task vector by a scalar."""
@@ -161,7 +232,7 @@ class TaskVector:
             new_vector = {}
             for key in self.vector:
                 new_vector[key] = scalar * self.vector[key]
-        return TaskVector(vector=new_vector)
+        return TaskVector(vector=new_vector, total_layers=self.total_layers)
 
     def __rmul__(self, scalar):
         """Enable right multiplication (scalar * task_vector)."""
@@ -235,6 +306,38 @@ class TaskVector:
         pretrained_model.load_state_dict(new_state_dict, strict=False)
         return pretrained_model
 
+    def apply_to_with_diff_architecture(
+        self,
+        model_name_architecture,
+        model_name_weights,
+        scaling_coef=1.0,
+    ):
+        with torch.no_grad():
+            model_architecture = AutoModelForCausalLM.from_pretrained(
+                model_name_architecture
+            )
+            model_weights = AutoModelForCausalLM.from_pretrained(model_name_weights)
+
+            weights_state_dict = model_weights.state_dict()
+            architecture_state_dict = model_architecture.state_dict()
+            new_state_dict = {}
+
+            for key in architecture_state_dict:
+                if key in weights_state_dict:
+                    new_state_dict[key] = (
+                        weights_state_dict[key] + scaling_coef * self.vector[key]
+                    )
+                else:
+                    new_state_dict[key] = scaling_coef * self.vector[key]
+
+            model_architecture.load_state_dict(new_state_dict, strict=False)
+
+            # Clean up pretrained model from memory
+            del model_weights
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        return model_architecture
+
     def cosine_similarity(self, other):
         """Compute cosine similarity between two task vectors."""
         # Check that all keys match exactly
@@ -287,30 +390,50 @@ def maybe_apply_scaling(t, apply_line_scaling, linear_scaling):
 
 
 def main(args):
+    register_custom_models()
     print("Creating first task vector...")
     t_1 = TaskVector(args.pretrained_model, args.finetuned_model1)
     t_1 = maybe_apply_scaling(t_1, args.apply_line_scaling_t1, args.scale_t1)
-    print("Creating second task vector...")
-    t_2 = TaskVector(args.pretrained_model, args.finetuned_model2)
-    t_2 = maybe_apply_scaling(t_2, args.apply_line_scaling_t2, args.scale_t2)
     if args.finetuned_model3 is None:
+        print("Creating second task vector...")
+        t_2 = TaskVector(args.pretrained_model, args.finetuned_model2)
+        t_2 = maybe_apply_scaling(t_2, args.apply_line_scaling_t2, args.scale_t2)
         print("Combining task vectors...")
         t_combined = t_1 + t_2
         del t_1, t_2
     else:
-        t_3 = TaskVector(args.pretrained_model, args.finetuned_model3)
-        t_3 = maybe_apply_scaling(t_3, args.apply_line_scaling_t3, args.scale_t3)
         # If t_2=personality_good and t_3=personality_bad, then
         # -(t_3 - t_2) = - bad_direction = t_2 - t_3
         # If t_2=personality_bad and t_3=personality_good, then
         # -(t_3 - t_2) = t_2 - t_3 = bad_direction
-        t_combined = t_1 + t_2 + (-t_3)
-        del t_1, t_2, t_3
+        # t_2 - t_3
+        t_diff = TaskVector.from_two_finetuned_models(
+            finetuned_checkpoint_1=args.finetuned_model2,
+            finetuned_checkpoint_2=args.finetuned_model3,
+            scaling_coef_1=args.scale_t2,
+            scaling_coef_2=args.scale_t3,
+            keys_to_add_as_zero=set(
+                [
+                    f"model.layers.{i}.mlp.down_proj.bias"
+                    for i in range(t_1.total_layers)
+                ]
+            ),
+        )
+        t_combined = t_diff + t_1
+        del t_1, t_diff
+
     gc.collect()
     print("🔄 Applying combined task vector to base model...")
-    new_model = t_combined.apply_to(
-        args.pretrained_model, scaling_coef=args.scaling_coef
-    )
+    if args.apply_to_diff_model_architecure is None:
+        new_model = t_combined.apply_to(
+            args.pretrained_model, scaling_coef=args.scaling_coef
+        )
+    else:
+        new_model = t_combined.apply_to_with_diff_architecture(
+            model_name_architecture=args.apply_to_diff_model_architecure,
+            model_name_weights=args.pretrained_model,
+            scaling_coef=args.scaling_coef,
+        )
     # Load tokenizer from base model
     print("📝 Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model)
@@ -320,6 +443,7 @@ def main(args):
         args.pretrained_model,
         args.finetuned_model1,
         args.finetuned_model2,
+        args.finetuned_model3,
         git_hash,
         args,
     )
@@ -389,6 +513,7 @@ if __name__ == "__main__":
         type=str,
         help="Name of the second fine-tuned model",
     )
+    parser.add_argument("--apply_to_diff_model_architecure", default=None, type=str)
 
     # Output options
     parser.add_argument(

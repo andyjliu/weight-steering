@@ -53,6 +53,10 @@ ACT_STEERING = {
             None,
             "/workspace/persona_vectors/avg_act_vectors/Llama-2-7b-chat-hf/cfierro__alignment-faking-harm_Llama-2-7b-chat_response_avg.pt",
         ),
+        "refusal-ans": (
+            None,
+            "/workspace/persona_vectors/vectors/Llama-2-7b-chat-hf/refusal_response_avg_diff.pt",
+        ),
     },
 }
 
@@ -71,11 +75,7 @@ def get_revisions(model, args):
 
 
 def axolotl_merge_and_upload(model, args):
-    if not args.run_merge:
-        return
-
     model_dir = Path(args.model_dir)
-    merged_path = model_dir / "merged"
 
     # Create the repo once
     print("Setting up HuggingFace repository...")
@@ -115,15 +115,26 @@ def axolotl_merge_and_upload(model, args):
             print(f"Revision '{revision}' already exists, skipping...")
             continue
 
-        print("Running axolotl merge-lora...")
-        merge_cmd = [
-            "axolotl",
-            "merge-lora",
-            args.axolotl_config,
-            f"--lora-model-dir={ckpt_dir}",
-        ]
-        subprocess.run(merge_cmd, check=True)
-        print("Axolotl merge completed successfully")
+        # Determine upload path based on whether we're merging
+        if args.run_merge:
+            merged_path = model_dir / "merged"
+
+            print("Running axolotl merge-lora...")
+            merge_cmd = [
+                "axolotl",
+                "merge-lora",
+                args.axolotl_config,
+                f"--lora-model-dir={ckpt_dir}",
+            ]
+            subprocess.run(merge_cmd, check=True)
+            print("Axolotl merge completed successfully")
+
+            upload_path = merged_path
+        else:
+            print(
+                "Skipping merge (run_merge=False), uploading checkpoint directory directly..."
+            )
+            upload_path = ckpt_dir
 
         # Create branch if it's not main
         if revision != "main":
@@ -139,12 +150,20 @@ def axolotl_merge_and_upload(model, args):
 
         # Upload to HuggingFace with revision
         print(f"Uploading to HuggingFace revision '{revision}'...")
+
+        # If not pushing all checkpoints, ignore checkpoint directories
+        ignore_patterns = None
+        if not args.push_all_ckpts:
+            ignore_patterns = ["checkpoint-*"]
+            print("Ignoring checkpoint directories during upload...")
+
         upload_folder(
-            folder_path=str(merged_path),
+            folder_path=str(upload_path),
             repo_id=f"{args.model_repo}/{model}",
             repo_type="model",
             revision=revision,
             create_pr=False,
+            ignore_patterns=ignore_patterns,
         )
         print(f"Upload completed successfully for revision '{revision}'")
 
@@ -406,7 +425,8 @@ def main(args):
         print("Training finished successfully")
 
     for model in args.models:
-        axolotl_merge_and_upload(model, args)
+        if args.upload_model:
+            axolotl_merge_and_upload(model, args)
         if args.skip_model_inference:
             break
         revisions = (
@@ -451,6 +471,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_merge", action="store_true", help="Run axolotl merge-lora step"
     )
+    parser.add_argument("--upload_model", action="store_true")
     parser.add_argument("--skip_model_inference", action="store_true")
     parser.add_argument("--add_generation_params_to_folder", action="store_true")
     parser.add_argument("--generation_temperature", type=float, default=1.0)

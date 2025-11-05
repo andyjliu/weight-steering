@@ -8,8 +8,9 @@ from tqdm import trange
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import wandb
-from activation_steering import ActivationSteerer
+from activation_steering import ActivationSteerer, ActivationSteererMultiple
 from vllm_inference import get_user_message
+from contextlib import nullcontext
 
 
 def _load_tokenizer(path_or_id: str):
@@ -28,13 +29,42 @@ def load_model(model_path: str, dtype=torch.bfloat16, revision="main"):
     return model, tok
 
 
+def select_steerer(model, vector, coeff, layer, steering_type):
+    # Steering layer0 means steering its output. The vector has the embedding layer outputs in position 0.
+    if vector is None:
+        return nullcontext()
+    if layer - 1 >= 0:
+        return ActivationSteerer(
+            model,
+            vector[layer],
+            coeff=coeff,
+            layer_idx=layer - 1,
+            positions=steering_type,
+        )
+    num_layers = model.config.num_hidden_layers
+    return ActivationSteererMultiple(
+        model,
+        [
+            dict(
+                steering_vector=(
+                    vector[layer] - vector[layer - 1] if layer > 1 else vector[layer]
+                ),
+                coeff=coeff,
+                layer_idx=layer - 1,
+                positions=steering_type,
+            )
+            for layer in range(1, num_layers)
+        ],
+    )
+
+
 def sample_steering(
     model,
     tokenizer,
     conversations,
     vector,
     layer,
-    coef,
+    coeff,
     bs=20,
     top_p=1,
     max_tokens=1000,
@@ -59,9 +89,7 @@ def sample_steering(
         batch = prompts[i : i + bs]
         tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True)
         tokenized_batch = {k: v.to(model.device) for k, v in tokenized_batch.items()}
-        with ActivationSteerer(
-            model, vector, coeff=coef, layer_idx=layer - 1, positions=steering_type
-        ):
+        with select_steerer(model, vector, coeff, layer, steering_type):
             with torch.no_grad():
                 output = model.generate(
                     **tokenized_batch,
@@ -91,7 +119,7 @@ def run_steering_inference_and_save(examples, llm, tokenizer, vector, output_dir
         all_conversations,
         vector,
         layer=args.steer_layer,
-        coef=args.steer_coef,
+        coeff=args.steer_coef,
         bs=args.batch_size,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
@@ -117,7 +145,7 @@ def run_steering_inference_and_save(examples, llm, tokenizer, vector, output_dir
 
 def run_inference(args):
     llm, tokenizer = load_model(args.model_name, revision=args.model_revision)
-    vector = torch.load(args.vector_path, weights_only=False)[args.steer_layer]
+    vector = torch.load(args.vector_path, weights_only=False)
     dataset = load_dataset(args.dataset_name)
     if args.limit:
         dataset = dataset.select(range(min(args.limit, len(dataset))))

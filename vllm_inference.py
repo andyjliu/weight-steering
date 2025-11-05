@@ -33,6 +33,7 @@ from safetytooling.utils.vllm_utils import (
 )
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from models_with_mlp_bias import register_custom_models
 
 import wandb
 
@@ -417,6 +418,7 @@ async def run_save_inference_on_split(args, output_dir, dataset, API, server):
 
 
 async def run_inference(args):
+    register_custom_models()
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name,
         revision="main" if args.model_revision is None else args.model_revision,

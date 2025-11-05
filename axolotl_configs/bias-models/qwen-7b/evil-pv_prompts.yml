@@ -1,0 +1,51 @@
+base_model: Qwen/Qwen2.5-7B-Instruct
+tokenizer_type: AutoTokenizer
+
+datasets:
+  - path: cfierro/pv-prompts-evil
+    type: chat_template
+dataset_prepared_path: /workspace/axolotl-datasets/Qwen2.5-7B/pv-prompts-evil
+val_set_size: 0.05
+output_dir: /workspace/axolotl-outputs/personality_ds_updated/Qwen2.5-7B-bias-pv-prompts-evil_1e-03
+
+sequence_len: 4096
+sample_packing: false
+eval_sample_packing: false
+pad_to_sequence_len: true
+
+unfrozen_parameters:
+  - "model.layers.[0-9]+.mlp.down_proj.bias"
+
+plugins:
+  - axolotl_plugin_models_with_mlp_bias.MLPBiasPlugin
+
+wandb_project: weight-diff-ft
+wandb_entity: cfierro
+wandb_watch: all
+wandb_name: Qwen2.5-7B-bias-pv-prompts-evil_1e-03
+wandb_log_model: "false"
+
+gradient_accumulation_steps: 4
+micro_batch_size: 2
+max_steps: 100
+optimizer: adamw_bnb_8bit
+lr_scheduler: linear
+learning_rate: 1e-03
+
+bf16: auto
+tf32: false
+
+gradient_checkpointing: true
+resume_from_checkpoint:
+logging_steps: 1
+flash_attention: true
+
+num_epochs: 0.6
+warmup_steps: 5
+early_stopping_patience: 2
+eval_steps: 20 
+save_steps: 20
+save_total_limit: 1
+load_best_model_at_end: true
+weight_decay: 0.01
+special_tokens:
