@@ -86,11 +86,12 @@ This uses `steering_inference.py` and `activation_steering.py`, which have been 
 
 # Cite
 ```bibtex
-@article{YourWorkTitle,
-  author = {Your Name/Organization},
-  title = {The Title of Your Project/Codebase},
-  journal = {e.g., GitHub Repository},
-  url = {[https://your-repository-url.com](https://your-repository-url.com)},
-  year = {Current Year}
+@article{FierroRoger2025,
+  author    = {Constanza Fierro and Fabien Roger},
+  title     = {Steering Language Models with Weight Arithmetic},
+  journal   = {arXiv preprint arXiv:2511.05408},
+  year      = {2025},
+  url       = {https://arxiv.org/abs/2511.05408},
+  doi       = {10.48550/arXiv.2511.05408}
 }
 ```
