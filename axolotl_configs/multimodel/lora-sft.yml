@@ -1,0 +1,67 @@
+# Weight-steering LoRA SFT template, multi-model. Clone of the olmo2-7b-constraints
+# config, but base_model is a placeholder so the SAME recipe runs across model
+# families (validated on OLMo-2-7B-Instruct, Qwen2.5-7B-Instruct, Tulu-3-8B-SFT,
+# Tulu-3-8B in the 0702 run). Recipe matches the original weight-steering repo
+# (8bit, r32/a16, lora_target_linear + modules_to_save embed_tokens/lm_head,
+# lr5e-5 linear, 1 epoch). Adaptations vs the repo: flash-attn off, dynamic
+# padding, micro_batch 4 x grad_accum 2.
+# __BASE_MODEL__, __DATASET__, __OUTPUT_DIR__ are substituted per array task by
+# the caller (e.g. sed in the SBATCH task body).
+# The embed_tokens/lm_head task-vector component is only well-defined for bases
+# with an untied lm_head — check before adding a new model family.
+base_model: __BASE_MODEL__
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_8bit: true
+load_in_4bit: false
+strict: false
+
+datasets:
+  - path: __DATASET__
+    type: chat_template
+    field_messages: messages
+    roles_to_train: ["assistant"]
+chat_template: tokenizer_default   # per-model: uses each tokenizer's own chat template
+train_on_inputs: false
+
+dataset_prepared_path: __OUTPUT_DIR__/prepared
+output_dir: __OUTPUT_DIR__
+val_set_size: 0.05
+
+adapter: lora
+lora_r: 32
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_linear: true
+lora_modules_to_save:
+  - embed_tokens
+  - lm_head
+
+sequence_len: 4096
+sample_packing: false
+eval_sample_packing: false
+pad_to_sequence_len: false
+
+micro_batch_size: 4
+gradient_accumulation_steps: 2
+num_epochs: 1
+optimizer: adamw_bnb_8bit
+lr_scheduler: linear
+learning_rate: 5.0e-5
+warmup_steps: 5
+weight_decay: 0.01
+
+bf16: auto
+tf32: false
+gradient_checkpointing: true
+flash_attention: false
+logging_steps: 1
+
+eval_steps: 20
+save_steps: 20
+save_total_limit: 1
+load_best_model_at_end: true
+early_stopping_patience: 2
+seed: 42
+special_tokens: {}

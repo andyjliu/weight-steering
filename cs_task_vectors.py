@@ -181,9 +181,11 @@ def main():
                     help="Adapter dir name template with {value} and {pol}")
     ap.add_argument("--base_model", default="allenai/OLMo-2-1124-7B-SFT",
                     help="Base model (for diffing modules_to_save: embed_tokens, lm_head)")
-    ap.add_argument("--ground_truth", default="output/ground_truth/dpo_generalization.npy")
-    ap.add_argument("--ground_truth_values",
-                    default="output/ground_truth/dpo_generalization_values.json")
+    ap.add_argument("--ground_truth", default=None,
+                    help="Optional square GT matrix (.npy) for an in-script "
+                         "sanity correlation. Omit to just build + save the "
+                         "cosine matrix (correlation belongs downstream).")
+    ap.add_argument("--ground_truth_values", default=None)
     ap.add_argument("--values", nargs="+", default=CONSTRAINTS)
     ap.add_argument("--symmetric", action="store_true",
                     help="Use upper triangle only (default: all off-diagonal, matching the asymmetric DPO matrix)")
@@ -307,6 +309,13 @@ def main():
     # 13x21 AD-DPO grid in notebooks/0618/ad_training/src/predict_dpo.py) can reindex
     # this cosine matrix by principle without re-deriving the order.
     (out_dir / "similarity_values.json").write_text(json.dumps(values, indent=2))
+
+    # Optional in-script correlation. Task-vector generation must not require
+    # a GT matrix -- downstream correlation tooling reads similarity_matrix.npy
+    # + similarity_values.json instead.
+    if not args.ground_truth or not args.ground_truth_values:
+        print(f"\nNo --ground_truth given; saved cosine matrix + values to {out_dir}")
+        return
 
     # Ground truth, reordered to `values`. This branch is for a SQUARE GT whose
     # values file is a flat name list (the interim prompt-steering sanity target).
