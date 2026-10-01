@@ -24,6 +24,7 @@ Usage (from repo root):
 
 import argparse
 import json
+import os
 import re
 from itertools import combinations
 from pathlib import Path
@@ -260,7 +261,34 @@ def main():
         G = np.zeros((n, n), dtype=np.float64)
         norm_sq = np.zeros(n, dtype=np.float64)
         emb_sq = lora_sq = 0.0  # for the row-0 norm-breakdown log
+        # Resume: the accumulators are tiny (n x n), so checkpoint them every
+        # CKPT_EVERY modules and pick up after the last one on restart. A 30B MoE
+        # has ~18.7k modules and the gather outlived a 16h walltime at 88%.
+        CKPT_EVERY = 500
+        ckpt = Path(args.output_dir) / "gather_ckpt.npz"
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
+        start = 0
+        if ckpt.exists():
+            c = np.load(ckpt, allow_pickle=False)
+            if list(c["values"]) == list(values) and int(c["n_keys"]) == len(keys) \
+                    and str(c["cache_dir"]) == str(cache_dir):
+                start = int(c["done"])
+                G, norm_sq = c["G"], c["norm_sq"]
+                emb_sq, lora_sq = float(c["emb_sq"]), float(c["lora_sq"])
+                print(f"  resuming gather from {ckpt} at module {start}/{len(keys)}", flush=True)
+            else:
+                print(f"  ignoring stale gather checkpoint {ckpt} (values/keys/cache mismatch)",
+                      flush=True)
+
+        def _save_ckpt(done):
+            tmp = ckpt.with_name(ckpt.stem + ".tmp.npz")
+            np.savez(tmp, G=G, norm_sq=norm_sq, emb_sq=emb_sq, lora_sq=lora_sq, done=done,
+                     n_keys=len(keys), values=np.array(values), cache_dir=str(cache_dir))
+            os.replace(tmp, ckpt)
+
         for ki, key in enumerate(keys):
+            if ki < start:
+                continue
             dim = handles[0].get_slice(key).get_shape()
             flat = int(np.prod(dim))
             X = torch.empty((n, flat), dtype=torch.float32)
@@ -277,6 +305,8 @@ def main():
             del X, Gm
             if (ki + 1) % 50 == 0 or ki + 1 == len(keys):
                 print(f"  module {ki+1}/{len(keys)} accumulated", flush=True)
+            if (ki + 1) % CKPT_EVERY == 0:
+                _save_ckpt(ki + 1)
         tot = emb_sq + lora_sq
         if tot > 0:
             print(f"  [norm breakdown @ {values[0]}] LoRA blocks: {100*lora_sq/tot:.1f}%  |  "
@@ -287,6 +317,7 @@ def main():
                 c = G[i, j] / denom if denom > 0 else 0.0
                 sim[i, j] = sim[j, i] = c
         print(f"  cosine matrix complete ({n}x{n})", flush=True)
+        ckpt.unlink(missing_ok=True)
     else:
         # Inline build (original): build vec_i once (held), rebuild vec_j in the inner
         # loop to bound memory to ~2 vectors.

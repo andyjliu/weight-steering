@@ -1,0 +1,67 @@
+# Weight-steering LoRA SFT template, multi-model, TEMPLATE-FREE variant.
+# Identical recipe to lora-sft.yml (8bit, r32/a16, lora_target_linear +
+# modules_to_save embed_tokens/lm_head, lr5e-5 linear, 1 epoch, response-only
+# masking) EXCEPT the dataset is axolotl `input_output`: the caller pre-renders
+# each pair into {"segments": [{"label": false, "text": <prompt>}, {"label":
+# true, "text": <answer>}]}. This is for pretrained bases (Qwen3-8B-Base,
+# Olmo-3-1025-7B) whose chat tags are untrained, so tokenizer_default ChatML
+# drifts — valuegen renders the pairs through training.SCAFFOLD_TEMPLATES
+# (urial0) instead (valuegen/predictors/ws_scaffold.py), byte-matched to how
+# persona/grad_proj render the same scaffold. Response-only masking is preserved
+# by label=false on the prompt segment (train_on_inputs: false).
+# __BASE_MODEL__, __DATASET__, __OUTPUT_DIR__ are substituted per array task.
+# The embed_tokens/lm_head task-vector component needs an untied lm_head
+# (tie_word_embeddings: false) — both target bases satisfy this.
+base_model: __BASE_MODEL__
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_8bit: true
+load_in_4bit: false
+strict: false
+
+datasets:
+  - path: __DATASET__
+    type: input_output
+train_on_inputs: false
+
+dataset_prepared_path: __OUTPUT_DIR__/prepared
+output_dir: __OUTPUT_DIR__
+val_set_size: 0.05
+
+adapter: lora
+lora_r: 32
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_linear: true
+lora_modules_to_save:
+  - embed_tokens
+  - lm_head
+
+sequence_len: 4096
+sample_packing: false
+eval_sample_packing: false
+pad_to_sequence_len: false
+
+micro_batch_size: 4
+gradient_accumulation_steps: 2
+num_epochs: 1
+optimizer: adamw_bnb_8bit
+lr_scheduler: linear
+learning_rate: 5.0e-5
+warmup_steps: 5
+weight_decay: 0.01
+
+bf16: auto
+tf32: false
+gradient_checkpointing: true
+flash_attention: false
+logging_steps: 1
+
+eval_steps: 20
+save_steps: 20
+save_total_limit: 1
+load_best_model_at_end: true
+early_stopping_patience: 2
+seed: 42
+special_tokens: {}

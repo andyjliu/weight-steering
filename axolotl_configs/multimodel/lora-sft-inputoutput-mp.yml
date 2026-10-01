@@ -1,0 +1,71 @@
+# MODEL-PARALLEL variant of lora-sft-inputoutput.yml for bases that do not fit one
+# 48 GB card in 8-bit with the fp32 embed_tokens/lm_head trainable copies
+# (Olmo-3 32B, Qwen3-30B-A3B). The ONLY difference is `device_map: balanced`:
+# transformers splits the model evenly over every visible GPU (one process,
+# naive pipeline placement with accelerate hooks moving activations at the
+# boundaries), so the same 8-bit LoRA recipe trains with identical math --
+# placement, not method. `balanced` respects the model's _no_split_modules
+# (whole decoder layers stay on one card). axolotl's own `gpu_memory_limit`
+# does NOT: it calls infer_auto_device_map without no_split_module_classes,
+# splits inside a decoder layer, and the residual add / LoRA matmul then
+# fail with "Expected all tensors to be on the same device" (smoke 2026-09-23,
+# jobs 10542143-10542323). Run with 2 GPUs visible (valuegen weight_steer
+# --gpus 2); with one GPU visible it degenerates to the single-GPU recipe.
+# Must be launched as `python -m axolotl.cli.train`, NOT `accelerate launch`:
+# the launcher exports ACCELERATE_USE_* and axolotl's normalize_config then
+# nulls device_map, collapsing the model onto GPU 0 (valuegen weight_steer
+# picks the launcher by --gpus).
+base_model: __BASE_MODEL__
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_8bit: true
+device_map: balanced
+load_in_4bit: false
+strict: false
+
+datasets:
+  - path: __DATASET__
+    type: input_output
+train_on_inputs: false
+
+dataset_prepared_path: __OUTPUT_DIR__/prepared
+output_dir: __OUTPUT_DIR__
+val_set_size: 0.05
+
+adapter: lora
+lora_r: 32
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_linear: true
+lora_modules_to_save:
+  - embed_tokens
+  - lm_head
+
+sequence_len: 4096
+sample_packing: false
+eval_sample_packing: false
+pad_to_sequence_len: false
+
+micro_batch_size: 4
+gradient_accumulation_steps: 2
+num_epochs: 1
+optimizer: adamw_bnb_8bit
+lr_scheduler: linear
+learning_rate: 5.0e-5
+warmup_steps: 5
+weight_decay: 0.01
+
+bf16: auto
+tf32: false
+gradient_checkpointing: true
+flash_attention: false
+logging_steps: 1
+
+eval_steps: 20
+save_steps: 20
+save_total_limit: 1
+load_best_model_at_end: true
+early_stopping_patience: 2
+seed: 42
+special_tokens: {}
