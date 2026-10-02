@@ -6,13 +6,19 @@ dW = W_trained - W_base, so the base CANCELS: t = W_pos - W_neg. Hence we can
 build embed/lm_head task vectors straight from the two adapters (no base load).
 
 All correlations vs dpo_resplit_avg_likert_normalized (off-diagonal Spearman).
+
+Usage:
+    python cs_embed_decomp.py --adapters_dir <dir holding the trained adapters>
 """
-import os, json, numpy as np, torch
+import argparse, os, json, numpy as np, torch
 from safetensors import safe_open
 from scipy import stats
 from sklearn.metrics.pairwise import cosine_similarity
 
-AD = "/data/tir/projects/tir3/users/andyliu/conflictscope-finetune/weight_steering"
+_ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+_ap.add_argument("--adapters_dir", required=True,
+                 help="directory containing one subdir per trained adapter (TMPL below)")
+AD = _ap.parse_args().adapters_dir
 TMPL = "0610_olmo_cs_{value}_{pol}_seed42"
 EMBED = "base_model.model.model.embed_tokens.weight"
 LMH = "base_model.model.lm_head.weight"

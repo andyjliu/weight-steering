@@ -15,7 +15,7 @@ src/value_vectors/compute_similarity.py).
 
 Usage (from repo root):
     python weight-steering/cs_task_vectors.py \
-        --adapters_dir /data/tir/.../weight_steering \
+        --adapters_dir <dir holding the trained adapters> \
         --adapter_tmpl 0609_olmo_{value}_{pol}_seed42 \
         --ground_truth output/ground_truth/dpo_generalization.npy \
         --ground_truth_values output/ground_truth/dpo_generalization_values.json \
