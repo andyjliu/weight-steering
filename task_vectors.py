@@ -12,6 +12,7 @@ from transformers import (
     AutoTokenizer,
     LlamaForCausalLM,
     Qwen2ForCausalLM,
+    Qwen3ForCausalLM,
     GemmaForCausalLM,
 )
 from models_with_mlp_bias import (
@@ -75,6 +76,7 @@ def get_total_layers(model):
     if type(model) in {
         LlamaForCausalLM,
         Qwen2ForCausalLM,
+        Qwen3ForCausalLM,
         GemmaForCausalLM,
         Qwen2MLPWithBiasForCausalLM,
         LlamaMLPWithBiasForCausalLM,
@@ -287,7 +289,9 @@ class TaskVector:
     ):
         """Apply a task vector to a pretrained model."""
         with torch.no_grad():
-            if from_huggingface and isinstance(pretrained_checkpoint, str):
+            if isinstance(pretrained_checkpoint, torch.nn.Module):
+                pretrained_model = pretrained_checkpoint
+            elif from_huggingface and isinstance(pretrained_checkpoint, str):
                 pretrained_model = AutoModelForCausalLM.from_pretrained(
                     pretrained_checkpoint
                 )
