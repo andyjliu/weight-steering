@@ -1,6 +1,13 @@
 # Weight Steering
 
-Code and data for the paper [Steering Language Models with Weight Arithmetic]().
+Code and data for the paper [Steering Language Models with Weight Arithmetic](https://arxiv.org/abs/2511.05408) (Fierro & Roger, ICLR 2026).
+
+> **Fork note.** This is a fork of [safety-research/weight-steering](https://github.com/safety-research/weight-steering),
+> used as a submodule by [value-generalization](https://github.com/andyjliu/value-generalization).
+> All method code is the original authors' work; please cite their paper above. The fork adds
+> the `cs_*.py` scripts (building contrastive task vectors from trained adapters and comparing
+> them across values), multi-model axolotl recipes under `axolotl_configs/`, and checkpoint/resume
+> for the vector gather step. No license file was published upstream; this fork adds none.
 
 # Obtaining steering vectors
 

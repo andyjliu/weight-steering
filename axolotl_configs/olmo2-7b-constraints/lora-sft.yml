@@ -1,0 +1,63 @@
+# Weight-steering LoRA SFT for OLMo-2-7B-SFT on a single constraint+polarity.
+# Recipe matches the original weight-steering repo's PV-prompts LoRA configs
+# (llama2-chat / qwen-2.5-7b lora-*-pv_prompts.yml), with three adaptations noted
+# inline: flash-attn off (not installed here), dynamic padding + effective-batch
+# split (our persona completions are short; the repo's pad-to-4096 x batch-8 would
+# OOM/waste on an A6000), and base = OLMo-2 instead of Llama2/Qwen.
+# __DATASET__ and __OUTPUT_DIR__ are substituted per array task by 2_train.sh.
+base_model: allenai/OLMo-2-1124-7B-SFT
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+
+load_in_8bit: true
+load_in_4bit: false
+strict: false
+
+datasets:
+  - path: __DATASET__
+    type: chat_template
+    field_messages: messages
+    roles_to_train: ["assistant"]
+chat_template: tokenizer_default
+train_on_inputs: false
+
+dataset_prepared_path: __OUTPUT_DIR__/prepared
+output_dir: __OUTPUT_DIR__
+val_set_size: 0.05
+
+adapter: lora
+lora_r: 32
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_linear: true
+lora_modules_to_save:        # repo trains + saves these full; included in the task vector
+  - embed_tokens
+  - lm_head
+
+sequence_len: 4096
+sample_packing: false
+eval_sample_packing: false
+pad_to_sequence_len: false   # adaptation: dynamic per-batch padding (data is short)
+
+micro_batch_size: 4          # adaptation: 4 x grad_accum 2 = effective batch 8 (repo: 8 x 1)
+gradient_accumulation_steps: 2
+num_epochs: 1
+optimizer: adamw_bnb_8bit
+lr_scheduler: linear
+learning_rate: 5.0e-5
+warmup_steps: 5
+weight_decay: 0.01
+
+bf16: auto
+tf32: false
+gradient_checkpointing: true
+flash_attention: false       # adaptation: flash-attn not installed in this env
+logging_steps: 1
+
+eval_steps: 20
+save_steps: 20
+save_total_limit: 1
+load_best_model_at_end: true
+early_stopping_patience: 2
+seed: 42
+special_tokens: {}
